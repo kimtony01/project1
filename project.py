@@ -56,6 +56,46 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
+# 방향 화살표 헬퍼
+# -------------------------------------------------------------
+def calc_bearing(lat1, lon1, lat2, lon2):
+    """두 좌표 사이의 방위각(도) 계산 - 화살표 회전 각도로 사용"""
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlon = lon2 - lon1
+    x = np.sin(dlon) * np.cos(lat2)
+    y = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
+    bearing = np.degrees(np.arctan2(x, y))
+    return (bearing + 360) % 360
+
+def add_direction_arrows(fig, lat_list, lon_list, color, size=11, n_arrows=3):
+    """경로를 따라 균등한 지점에 진행 방향을 가리키는 삼각형 마커 추가"""
+    n_points = len(lat_list)
+    if n_points < 2:
+        return
+    positions = np.linspace(0, n_points - 2, n_arrows).astype(int)
+    arrow_lat, arrow_lon, arrow_angle = [], [], []
+    for i in positions:
+        lat1, lon1 = lat_list[i], lon_list[i]
+        lat2, lon2 = lat_list[i + 1], lon_list[i + 1]
+        mid_lat = (lat1 + lat2) / 2
+        mid_lon = (lon1 + lon2) / 2
+        bearing = calc_bearing(lat1, lon1, lat2, lon2)
+        arrow_lat.append(mid_lat)
+        arrow_lon.append(mid_lon)
+        arrow_angle.append(bearing)
+
+    fig.add_trace(go.Scattergeo(
+        lat=arrow_lat, lon=arrow_lon,
+        mode="markers",
+        marker=dict(
+            symbol="triangle-up", size=size, color=color,
+            angle=arrow_angle, angleref="up",
+            line=dict(width=1, color="white")
+        ),
+        showlegend=False, hoverinfo="skip"
+    ))
+
+# -------------------------------------------------------------
 # 데이터 정의
 # -------------------------------------------------------------
 ROUTE_DB = {
@@ -251,21 +291,27 @@ for key, data in ROUTE_DB.items():
     tz = data["threat_zone"]
     is_selected = (key == selected_route_key)
     line_color = "#22d3ee" if is_selected else "#334155"
+    path_lat = data["standard_path"]["lat"]
+    path_lon = data["standard_path"]["lon"]
 
     # 글로우 바깥 레이어
     fig_world.add_trace(go.Scattergeo(
-        lat=data["standard_path"]["lat"], lon=data["standard_path"]["lon"],
+        lat=path_lat, lon=path_lon,
         mode="lines",
         line=dict(width=8 if is_selected else 3, color=line_color),
         opacity=0.15, showlegend=False, hoverinfo="skip"
     ))
     # 안쪽 선명한 선
     fig_world.add_trace(go.Scattergeo(
-        lat=data["standard_path"]["lat"], lon=data["standard_path"]["lon"],
+        lat=path_lat, lon=path_lon,
         mode="lines",
         line=dict(width=2.5 if is_selected else 1, color=line_color),
         showlegend=False, hoverinfo="skip"
     ))
+    # 진행 방향 화살표 (선택된 항로만 표시해서 지도가 지저분해지지 않게)
+    if is_selected:
+        add_direction_arrows(fig_world, path_lat, path_lon, line_color, size=13, n_arrows=3)
+
     # 초크포인트 마커
     fig_world.add_trace(go.Scattergeo(
         lat=[tz["lat"]], lon=[tz["lon"]],
@@ -306,6 +352,9 @@ fig_detail.add_trace(go.Scattergeo(
     lat=std_path["lat"], lon=std_path["lon"], mode="lines",
     line=dict(width=3, color="#3b82f6"), name="표준 항로"
 ))
+# 표준 항로 진행 방향 화살표
+add_direction_arrows(fig_detail, std_path["lat"], std_path["lon"], "#3b82f6", size=14, n_arrows=4)
+
 threat_color = "#ef4444" if ALERT_TRIGGERED else "#64748b"
 fig_detail.add_trace(go.Scattergeo(
     lat=[threat_loc["lat"]], lon=[threat_loc["lon"]], mode="markers+text",
@@ -323,6 +372,8 @@ if ALERT_TRIGGERED and best_alt:
         lat=best_alt["path_lat"], lon=best_alt["path_lon"], mode="lines",
         line=dict(width=4, color="#dc3545", dash="dash"), name=f"추천 대체: {best_alt['route_name']}"
     ))
+    # 대체 루트 진행 방향 화살표
+    add_direction_arrows(fig_detail, best_alt["path_lat"], best_alt["path_lon"], "#dc3545", size=14, n_arrows=4)
 
 if real_ship_data:
     other_lat, other_lon, other_name = [], [], []
