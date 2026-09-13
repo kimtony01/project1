@@ -4,9 +4,15 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
+import json
+import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # -------------------------------------------------------------
-# 1. 기본 설정 및 데이터 정의 (정밀 바닷길 + 추천 로직 속성)
+# 1. 기본 설정 및 데이터 정의
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="해상 항로 리스크 조기경보 및 대체 루트 추천 시스템",
@@ -15,28 +21,17 @@ st.set_page_config(
 
 ROUTE_DB = {
     "아시아 - 미주 동안 (파나마 운하)": {
+        "news_keyword": "Panama Canal shipping",
         "standard_risk_factors": {"news_cnt": 15, "weather_dist_km": 300, "threat_level": 3},
         "items": ["전자제품(HS 8542)", "자동차부품(HS 8708)", "소비재(HS 9503)"],
         "ship_location": {"lat": 9.38, "lon": -79.92, "name": "파나마 운하 대기 구역(콜론)"},
         "threat_zone": {"lat": 9.08, "lon": -79.68, "name": "가툰 호수 가뭄/통항 제한 구역"},
+        "standard_path": {"lat": [35.1, 34.0, 30.0, 20.0, 9.38, 9.12, 9.35, 15.0, 24.0, 32.0, 40.7],
+                           "lon": [129.0, 145.0, 180.0, -140.0, -79.92, -79.7, -79.9, -75.0, -74.0, -75.0, -74.0]},
         "alternatives": [
             {
-                "route_name": "기존 항로: 파나마 운하 통과",
-                "transit_time_days": 24,
-                "cost_index_pct": 100,
-                "safety_score": 50,  # 가뭄 대기 페널티
-                "war_risk_insurance": "일반 요율 (가뭄 할증 +$10,000/선박)",
-                "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
-                "status": "가뭄 대기지연",
-                "recommendation_reason": "가장 짧은 기본 항로이나 가툰 호수 저수위로 인해 사전 예약 슬롯 미확보 시 통항 대기가 7~10일 발생할 수 있습니다.",
-                "path_lat": [35.1, 34.0, 30.0, 20.0, 9.38, 9.12, 9.35, 15.0, 24.0, 32.0, 40.7],
-                "path_lon": [129.0, 145.0, 180.0, -140.0, -79.92, -79.7, -79.9, -75.0, -74.0, -75.0, -74.0]
-            },
-            {
                 "route_name": "우회 항로: 수에즈 운하 경유 (역방향)",
-                "transit_time_days": 34,
-                "cost_index_pct": 130,
-                "safety_score": 80,
+                "transit_time_days": 34, "cost_index_pct": 130, "safety_score": 80,
                 "war_risk_insurance": "할증 가능",
                 "eligibility": {"한국": "통행 가능", "미국": "조건부", "중국": "통행 가능", "영국": "조건부", "이스라엘": "통행 불가"},
                 "status": "추천 우회로",
@@ -46,9 +41,7 @@ ROUTE_DB = {
             },
             {
                 "route_name": "우회 항로: 남아메리카 마젤란/혼곶 우회",
-                "transit_time_days": 42,
-                "cost_index_pct": 155,
-                "safety_score": 65,
+                "transit_time_days": 42, "cost_index_pct": 155, "safety_score": 65,
                 "war_risk_insurance": "일반 요율",
                 "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
                 "status": "초대형선(비운하) 대체안",
@@ -59,28 +52,17 @@ ROUTE_DB = {
         ]
     },
     "아시아 - 유럽 (홍해 / 수에즈 운하)": {
+        "news_keyword": "Red Sea shipping attack",
         "standard_risk_factors": {"news_cnt": 28, "weather_dist_km": 800, "threat_level": 4},
         "items": ["자동차/부품(HS 8708)", "이차전지(HS 8507)", "전자부품(HS 8542)"],
         "ship_location": {"lat": 12.8, "lon": 44.5, "name": "아덴만 진입부"},
         "threat_zone": {"lat": 14.5, "lon": 42.5, "name": "홍해 남부 분쟁 위험 구역"},
+        "standard_path": {"lat": [35.1, 22.0, 1.3, 5.8, 12.5, 20.0, 31.0, 36.5, 36.0, 44.0, 51.9],
+                           "lon": [129.0, 120.0, 103.8, 80.5, 44.0, 38.5, 32.3, 15.0, -5.6, -9.5, 4.3]},
         "alternatives": [
             {
-                "route_name": "기존 항로: 수에즈 운하 직통",
-                "transit_time_days": 25,
-                "cost_index_pct": 100,
-                "safety_score": 20,  # 분쟁 고위험
-                "war_risk_insurance": "할증 적용 (+250%)",
-                "eligibility": {"한국": "조건부 가능", "미국": "표적 위험", "영국": "표적 위험", "중국": "통행 가능", "이스라엘": "통행 불가"},
-                "status": "고위험",
-                "recommendation_reason": "소요 시간은 가장 짧으나 홍해 군사 위협 및 전쟁보험료 폭증(+250%)으로 선박 안전상 위험도가 매우 높습니다.",
-                "path_lat": [35.1, 22.0, 1.3, 5.8, 12.5, 20.0, 31.0, 36.5, 36.0, 44.0, 51.9],
-                "path_lon": [129.0, 120.0, 103.8, 80.5, 44.0, 38.5, 32.3, 15.0, -5.6, -9.5, 4.3]
-            },
-            {
                 "route_name": "우회 항로: 아프리카 희망봉",
-                "transit_time_days": 38,
-                "cost_index_pct": 142,
-                "safety_score": 95,
+                "transit_time_days": 38, "cost_index_pct": 142, "safety_score": 95,
                 "war_risk_insurance": "일반 요율",
                 "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "영국": "통행 가능", "중국": "통행 가능", "이스라엘": "통행 가능"},
                 "status": "최우선 권장",
@@ -91,28 +73,17 @@ ROUTE_DB = {
         ]
     },
     "중동 - 동아시아 (호르무즈 해협)": {
+        "news_keyword": "Strait of Hormuz tension",
         "standard_risk_factors": {"news_cnt": 18, "weather_dist_km": 500, "threat_level": 4},
         "items": ["원유(HS 2709)", "석유제품(HS 2710)", "LPG(HS 2711)"],
         "ship_location": {"lat": 26.5, "lon": 56.5, "name": "호르무즈 해협 진입부"},
         "threat_zone": {"lat": 26.8, "lon": 55.8, "name": "호르무즈 북부 군사 긴장 구역"},
+        "standard_path": {"lat": [27.0, 26.5, 24.5, 15.0, 5.8, 1.3, 12.0, 22.0, 35.1],
+                           "lon": [50.2, 56.5, 59.0, 68.0, 80.5, 103.8, 112.0, 120.0, 129.0]},
         "alternatives": [
             {
-                "route_name": "기존 항로: 호르무즈 해협 통과",
-                "transit_time_days": 15,
-                "cost_index_pct": 100,
-                "safety_score": 35,
-                "war_risk_insurance": "할증 적용 (+300%)",
-                "eligibility": {"한국": "통행 가능", "미국": "공격 위험", "영국": "공격 위험", "중국": "통행 가능", "이스라엘": "나포 위험"},
-                "status": "위험",
-                "recommendation_reason": "원유 수송 주력 루트이나 이란 해역 인접 군사 긴장으로 인해 지정학적 나포 및 공격 위험이 상존합니다.",
-                "path_lat": [27.0, 26.5, 24.5, 15.0, 5.8, 1.3, 12.0, 22.0, 35.1],
-                "path_lon": [50.2, 56.5, 59.0, 68.0, 80.5, 103.8, 112.0, 120.0, 129.0]
-            },
-            {
                 "route_name": "대체 항로: 사우디 서안 얀부항(홍해) 선적 연계",
-                "transit_time_days": 19,
-                "cost_index_pct": 135,
-                "safety_score": 85,
+                "transit_time_days": 19, "cost_index_pct": 135, "safety_score": 85,
                 "war_risk_insurance": "일반 요율",
                 "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "영국": "통행 가능", "중국": "통행 가능", "이스라엘": "조건부"},
                 "status": "파이프라인 연계안",
@@ -123,28 +94,17 @@ ROUTE_DB = {
         ]
     },
     "동남아 - 동아시아 (말라카 해협)": {
+        "news_keyword": "Strait of Malacca shipping",
         "standard_risk_factors": {"news_cnt": 4, "weather_dist_km": 120, "threat_level": 2},
         "items": ["반도체(HS 8542)", "정밀기계(HS 8479)", "석유화학(HS 2901)"],
         "ship_location": {"lat": 2.5, "lon": 101.8, "name": "말라카 해협 중앙"},
         "threat_zone": {"lat": 4.0, "lon": 100.5, "name": "열대성 폭풍 및 해적 빈발 구역"},
+        "standard_path": {"lat": [1.3, 3.0, 5.5, 12.0, 22.0, 35.1],
+                           "lon": [103.8, 101.0, 98.0, 112.0, 120.0, 129.0]},
         "alternatives": [
             {
-                "route_name": "기존 항로: 말라카 해협 통과",
-                "transit_time_days": 8,
-                "cost_index_pct": 100,
-                "safety_score": 75,
-                "war_risk_insurance": "일반 요율",
-                "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
-                "status": "기상 주의",
-                "recommendation_reason": "비용과 시간 면에서 압도적으로 유리하므로 태풍 직접 통과 예보가 아닐 경우 감속 운항 유지가 권장됩니다.",
-                "path_lat": [1.3, 3.0, 5.5, 12.0, 22.0, 35.1],
-                "path_lon": [103.8, 101.0, 98.0, 112.0, 120.0, 129.0]
-            },
-            {
                 "route_name": "우회 항로: 순다 / 롬복 해협 경유",
-                "transit_time_days": 12,
-                "cost_index_pct": 125,
-                "safety_score": 90,
+                "transit_time_days": 12, "cost_index_pct": 125, "safety_score": 90,
                 "war_risk_insurance": "일반 요율",
                 "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
                 "status": "기상 회피안",
@@ -178,6 +138,34 @@ def get_trained_risk_model():
 model = get_trained_risk_model()
 
 # -------------------------------------------------------------
+# 2-1. 뉴스 검색 함수 (NewsAPI.org)
+# -------------------------------------------------------------
+@st.cache_data(ttl=600)
+def fetch_news(query, display=3):
+    api_key = os.getenv("NEWSAPI_KEY")
+    if not api_key:
+        return None
+
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": f'"{query}"',
+        "language": "en",
+        "sortBy": "publishedAt",
+        "pageSize": display,
+        "apiKey": api_key
+    }
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        res.raise_for_status()
+        articles = res.json().get("articles", [])
+        return [
+            {"title": a["title"], "link": a["url"], "desc": a.get("description", "") or ""}
+            for a in articles
+        ]
+    except Exception:
+        return []
+
+# -------------------------------------------------------------
 # 3. 사이드바 설정
 # -------------------------------------------------------------
 st.sidebar.title("1. 모니터링 항로 설정")
@@ -196,6 +184,35 @@ geopolitical_level = st.sidebar.select_slider("지정학적 위협 텐션 지수
 alert_email = st.sidebar.text_input("비상 알림 수신 이메일", value="shipping_ops@trade.com")
 send_alert_btn = st.sidebar.button("비상 알림 수동 발송")
 
+st.sidebar.divider()
+st.sidebar.title("3. 실시간 AIS 데이터")
+
+real_ship_data = None
+selected_mmsi = None
+
+if os.path.exists("ship_data.json"):
+    with open("ship_data.json", "r", encoding="utf-8") as f:
+        real_ship_data = json.load(f)
+
+    st.sidebar.caption(f"마지막 업데이트: {real_ship_data['updated_at']}")
+
+    ship_options = {
+        mmsi: (info.get("name", "").strip() or f"MMSI:{mmsi}")
+        for mmsi, info in real_ship_data["ships"].items()
+        if "lat" in info and "lon" in info
+    }
+
+    if ship_options:
+        selected_mmsi = st.sidebar.selectbox(
+            "추적할 실제 선박 선택",
+            options=list(ship_options.keys()),
+            format_func=lambda x: ship_options[x]
+        )
+    else:
+        st.sidebar.info("현재 저장된 선박 위치 데이터가 없습니다.")
+else:
+    st.sidebar.warning("ship_data.json 파일이 없습니다. collector.py를 먼저 실행하세요.")
+
 # -------------------------------------------------------------
 # 4. 리스크 판정 및 추천 순위 산출 로직
 # -------------------------------------------------------------
@@ -207,10 +224,10 @@ ml_prob = model.predict_proba(features)[0]
 labels = {0: "정상 (LOW)", 1: "경고 (MEDIUM)", 2: "심각 (HIGH)"}
 risk_level_str = labels[ml_pred]
 
-# 종합 추천 지수 계산 (안전성 45%, 비용 35%, 시간 20% 반영)
+ALERT_TRIGGERED = ml_pred >= 1
+
 scored_alternatives = []
 for r in curr_route_data["alternatives"]:
-    # 통행 불가/위험 국적인 경우 안전성 감점
     passage = r["eligibility"].get(ship_nationality, "확인 필요")
     eligibility_penalty = 0
     if "불가" in passage or "표적" in passage or "나포" in passage:
@@ -219,21 +236,18 @@ for r in curr_route_data["alternatives"]:
         eligibility_penalty = 20
 
     effective_safety = max(0, r["safety_score"] - eligibility_penalty)
-    
-    # 종합 점수 (100점 만점 기준 환산)
-    # 비용지수 낮을수록, 소요시간 적을수록, 안전성 높을수록 점수 상승
     cost_score = max(0, 100 - (r["cost_index_pct"] - 100) * 1.2)
     time_score = max(0, 100 - (r["transit_time_days"] - 8) * 2.0)
     total_recommend_score = (effective_safety * 0.50) + (cost_score * 0.30) + (time_score * 0.20)
-    
+
     item_copy = dict(r)
     item_copy["total_score"] = round(total_recommend_score, 1)
     item_copy["effective_safety"] = effective_safety
     item_copy["passage_status"] = passage
     scored_alternatives.append(item_copy)
 
-# 추천 점수 높은 순으로 정렬
 scored_alternatives = sorted(scored_alternatives, key=lambda x: x["total_score"], reverse=True)
+best_alt = scored_alternatives[0] if scored_alternatives else None
 
 # -------------------------------------------------------------
 # 5. 메인 대시보드 레이아웃
@@ -249,148 +263,183 @@ col4.metric("위협요인 최근접 거리", f"{weather_distance} km")
 
 st.divider()
 
-# 바닷길 항로 지도 시각화
-st.subheader("실시간 선박 위치 및 추천 항로(바닷길) 맵")
+st.subheader("실시간 선박 위치 맵")
 
 ship_loc = curr_route_data["ship_location"]
 threat_loc = curr_route_data["threat_zone"]
+std_path = curr_route_data["standard_path"]
 
 fig_map = go.Figure()
-rank_colors = ["#28a745", "#007bff", "#6f42c1", "#dc3545"]
 
-for rank_idx, r in enumerate(scored_alternatives):
-    color = rank_colors[rank_idx % len(rank_colors)]
-    rank_label = f"[{rank_idx + 1}순위 추천] {r['route_name']}"
-    fig_map.add_trace(go.Scattergeo(
-        lat=r["path_lat"],
-        lon=r["path_lon"],
-        mode="lines+markers",
-        line=dict(width=3 if rank_idx == 0 else 2, color=color, dash="solid" if rank_idx == 0 else "dash"),
-        marker=dict(size=4),
-        name=rank_label,
-        hoverinfo="text",
-        text=[f"{rank_label}<br>소요: {r['transit_time_days']}일 | 추천점수: {r['total_score']}점" for _ in r["path_lat"]]
-    ))
-
-# 위험 구역 마커
 fig_map.add_trace(go.Scattergeo(
-    lat=[threat_loc["lat"]],
-    lon=[threat_loc["lon"]],
+    lat=std_path["lat"], lon=std_path["lon"],
+    mode="lines",
+    line=dict(width=2, color="#3b82f6"),
+    name="표준 항로"
+))
+
+threat_color = "rgba(220, 53, 69, 0.75)" if ALERT_TRIGGERED else "rgba(150, 150, 150, 0.5)"
+fig_map.add_trace(go.Scattergeo(
+    lat=[threat_loc["lat"]], lon=[threat_loc["lon"]],
     mode="markers+text",
-    marker=dict(size=24, color="rgba(220, 53, 69, 0.75)", symbol="circle"),
+    marker=dict(size=22, color=threat_color, symbol="circle"),
     text=[threat_loc["name"]],
     textposition="top center",
-    name="위험/통제 구역"
+    name="위험/모니터링 구역" if not ALERT_TRIGGERED else "⚠ 위협 감지 구역"
 ))
 
-# 현재 선박 위치 마커
 fig_map.add_trace(go.Scattergeo(
-    lat=[ship_loc["lat"]],
-    lon=[ship_loc["lon"]],
+    lat=[ship_loc["lat"]], lon=[ship_loc["lon"]],
     mode="markers+text",
-    marker=dict(size=16, color="#ffc107", symbol="triangle-up"),
-    text=[f"현재 위치: {ship_name}"],
+    marker=dict(size=14, color="#ffc107", symbol="triangle-up"),
+    text=[ship_name],
     textposition="bottom center",
-    name="선박 현재 위치"
+    name="시나리오 선박 위치"
 ))
+
+if ALERT_TRIGGERED and best_alt:
+    fig_map.add_trace(go.Scattergeo(
+        lat=best_alt["path_lat"], lon=best_alt["path_lon"],
+        mode="lines",
+        line=dict(width=4, color="#dc3545", dash="dash"),
+        name=f"추천 대체 루트: {best_alt['route_name']}"
+    ))
+
+if real_ship_data:
+    other_lats, other_lons, other_names = [], [], []
+    my_lat, my_lon, my_display_name = None, None, None
+
+    for mmsi, info in real_ship_data["ships"].items():
+        if "lat" not in info or "lon" not in info:
+            continue
+        if mmsi == selected_mmsi:
+            my_lat, my_lon = info["lat"], info["lon"]
+            my_display_name = info.get("name", "").strip() or f"MMSI:{mmsi}"
+        else:
+            other_lats.append(info["lat"])
+            other_lons.append(info["lon"])
+            other_names.append(info.get("name", "").strip() or f"MMSI:{mmsi}")
+
+    if other_lats:
+        fig_map.add_trace(go.Scattergeo(
+            lat=other_lats, lon=other_lons,
+            mode="markers",
+            marker=dict(size=4, color="gray", opacity=0.4),
+            text=other_names,
+            hoverinfo="text",
+            name="실시간 다른 선박"
+        ))
+
+    if my_lat is not None:
+        fig_map.add_trace(go.Scattergeo(
+            lat=[my_lat], lon=[my_lon],
+            mode="markers+text",
+            marker=dict(size=18, color="red", symbol="star", line=dict(width=2, color="black")),
+            text=[my_display_name],
+            textposition="top center",
+            name="내가 지정한 실제 선박"
+        ))
+
+        fig_map.add_trace(go.Scattergeo(
+            lat=[ship_loc["lat"], my_lat], lon=[ship_loc["lon"], my_lon],
+            mode="lines",
+            line=dict(width=3, color="red", dash="solid"),
+            name="이동 완료 구간"
+        ))
+
+        if ALERT_TRIGGERED:
+            fig_map.add_trace(go.Scattergeo(
+                lat=[my_lat, threat_loc["lat"]], lon=[my_lon, threat_loc["lon"]],
+                mode="lines",
+                line=dict(width=3, color="red", dash="dot"),
+                name="이동 예정 구간(위협 접근)"
+            ))
 
 fig_map.update_layout(
     geo=dict(
         projection_type="equirectangular",
-        showland=True,
-        landcolor="rgb(235, 235, 235)",
-        oceancolor="rgb(215, 232, 248)",
-        showocean=True,
-        showcoastlines=True,
-        coastlinecolor="rgb(160, 160, 160)",
-        showcountries=True,
-        countrycolor="rgb(200, 200, 200)",
+        showland=True, landcolor="rgb(240, 240, 240)",
+        oceancolor="rgb(220, 235, 250)", showocean=True,
+        showcoastlines=True, coastlinecolor="rgb(170, 170, 170)",
+        showcountries=True, countrycolor="rgb(210, 210, 210)",
         center=dict(lat=ship_loc["lat"], lon=ship_loc["lon"]),
-        projection_scale=1.5
+        projection_scale=2.0
     ),
-    margin=dict(l=0, r=0, t=30, b=0),
-    height=500,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    margin=dict(l=0, r=0, t=20, b=0),
+    height=750,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
 
 st.plotly_chart(fig_map, use_container_width=True)
 
-st.divider()
-
 # -------------------------------------------------------------
-# 6. 추천 순위별 상세 비교 및 추천 이유 섹션
-# -------------------------------------------------------------
-st.subheader("대체 루트 추천 순위별 종합 비교 및 사유 분석")
-
-# 순위별 카드 렌더링
-for rank_idx, r in enumerate(scored_alternatives):
-    rank_num = rank_idx + 1
-    with st.container():
-        badge_color = "🟢" if rank_num == 1 else ("🔵" if rank_num == 2 else "⚪")
-        st.markdown(f"### {badge_color} **{rank_num}순위 추천**: {r['route_name']}")
-        
-        c1, c2, c3, c4, c5 = st.columns([1.5, 1.2, 1.2, 1.5, 1.5])
-        c1.metric("종합 추천 점수", f"{r['total_score']} 점")
-        c2.metric("예상 소요 시간", f"{r['transit_time_days']} 일")
-        c3.metric("운임 지수", f"{r['cost_index_pct']} % (기준=100)")
-        c4.metric("전쟁보험료", r["war_risk_insurance"])
-        c5.metric(f"통행 가능 여부({ship_nationality})", r["passage_status"])
-        
-        st.info(f"💡 **추천 / 평가 사유**: {r['recommendation_reason']}")
-        st.write("")
-
-# 순위표 데이터프레임 요약
-comp_summary = []
-for rank_idx, r in enumerate(scored_alternatives):
-    comp_summary.append({
-        "추천순위": f"{rank_idx + 1}순위",
-        "항로명": r["route_name"],
-        "종합점수": r["total_score"],
-        "소요시간(일)": r["transit_time_days"],
-        "운임비용지수(%)": r["cost_index_pct"],
-        f"통행판정({ship_nationality})": r["passage_status"],
-        "핵심 추천 사유": r["recommendation_reason"]
-    })
-
-st.dataframe(pd.DataFrame(comp_summary), use_container_width=True)
-
-# 차트 비교
-chart_df = pd.DataFrame({
-    "항로 (추천순)": [f"[{i+1}순위] " + r["route_name"] for i, r in enumerate(scored_alternatives)],
-    "종합추천점수": [r["total_score"] for r in scored_alternatives],
-    "운항소요시간(일)": [r["transit_time_days"] for r in scored_alternatives],
-    "운임비용지수": [r["cost_index_pct"] for r in scored_alternatives]
-})
-
-fig_bar = px.bar(
-    chart_df,
-    x="항로 (추천순)",
-    y=["종합추천점수", "운항소요시간(일)", "운임비용지수"],
-    barmode="group",
-    title="추천 순위별 지표 비교 (종합점수 vs 소요시간 vs 비용지수)"
-)
-st.plotly_chart(fig_bar, use_container_width=True)
-
-# -------------------------------------------------------------
-# 7. 실무 액션 체크리스트
+# 6. 지도 아래: 상황 설명 + 뉴스
 # -------------------------------------------------------------
 st.divider()
-st.subheader("상황별 실무 대응 체크리스트")
 
-best_route = scored_alternatives[0]["route_name"]
+col_status, col_news = st.columns([1.3, 1])
 
-if ml_pred == 2:
-    st.error(f"주의: 고위험 등급 판정. 즉시 최우선 추천 루트인 [{best_route}] 전환 검토를 권장합니다.")
-    st.checkbox("1. 1순위 추천 항로 선사 및 포워더와 선복 계약 전환 협의")
-    st.checkbox("2. 파나마/홍해 통항 불가 및 대기 지연에 따른 화주 납기 조정 통보")
-    st.checkbox(f"3. {ship_nationality} 국적 선박 표적 가능성 점검 및 선박 보안 레벨 상향")
-elif ml_pred == 1:
-    st.warning(f"경고: 리스크 주의 단계. 현 항로 유지 시 대기 시간 추이와 [{best_route}] 운임 변동을 비교하십시오.")
-    st.checkbox("1. 운하/해협 대기 일수 및 통항 슬롯 실시간 확인")
-    st.checkbox("2. 우회 항로 벙커유(연료) 추가 소모량 및 비용 사전 산출")
-else:
-    st.success("안전: 정상 운항 상태입니다.")
-    st.checkbox("1. 표준 항해 일정 및 AIS 정상 보고 유지")
+with col_status:
+    st.subheader("현재 상황 판단")
+    if ALERT_TRIGGERED:
+        if ml_pred == 2:
+            st.error(f"🔴 심각 등급 — {curr_route_data['threat_zone']['name']} 인근 위협이 감지되었습니다.")
+        else:
+            st.warning(f"🟡 경고 등급 — {curr_route_data['threat_zone']['name']} 인근 리스크 상승이 감지되었습니다.")
 
-if send_alert_btn:
-    st.sidebar.success(f"[알림 발송 완료] 수신처: {alert_email} | 등급: {risk_level_str} | 최우선 추천: {best_route}")
+        st.markdown(f"""
+**우려 요인**
+- 관련 뉴스/이슈 건수: **{news_count}건** (전일 대비 {news_growth:+d}%)
+- 위협 최근접 거리: **{weather_distance}km**
+- 지정학적 텐션 지수: **{geopolitical_level}/5**
+
+**권장 조치**: 최우선 대체 루트 **[{best_alt['route_name']}]** 전환을 검토하십시오. (아래 대체 루트 비교 참고)
+""")
+    else:
+        st.success("🟢 현재 정상 운항 상태입니다. 특별한 위협이 감지되지 않았습니다.")
+        st.caption("사이드바에서 뉴스 건수, 기상 거리, 지정학적 텐션 지수를 조정하면 리스크 등급이 변화합니다.")
+
+with col_news:
+    st.subheader("관련 뉴스")
+    news_items = fetch_news(curr_route_data["news_keyword"])
+    if news_items is None:
+        st.info("NewsAPI 키(NEWSAPI_KEY)가 .env에 설정되지 않았습니다.")
+    elif len(news_items) == 0:
+        st.caption("관련 뉴스를 가져오지 못했습니다.")
+    else:
+        for n in news_items:
+            st.markdown(f"**[{n['title']}]({n['link']})**")
+            st.caption((n["desc"] or "")[:100] + "...")
+
+# -------------------------------------------------------------
+# 7. 위협 감지 시에만: 대체 루트 비교 + 체크리스트
+# -------------------------------------------------------------
+if ALERT_TRIGGERED:
+    st.divider()
+    st.subheader("대체 루트 추천 순위별 종합 비교")
+
+    for rank_idx, r in enumerate(scored_alternatives):
+        rank_num = rank_idx + 1
+        with st.container():
+            badge_color = "🟢" if rank_num == 1 else "🔵"
+            st.markdown(f"### {badge_color} **{rank_num}순위 추천**: {r['route_name']}")
+            c1, c2, c3, c4, c5 = st.columns([1.5, 1.2, 1.2, 1.5, 1.5])
+            c1.metric("종합 추천 점수", f"{r['total_score']} 점")
+            c2.metric("예상 소요 시간", f"{r['transit_time_days']} 일")
+            c3.metric("운임 지수", f"{r['cost_index_pct']} % (기준=100)")
+            c4.metric("전쟁보험료", r["war_risk_insurance"])
+            c5.metric(f"통행 가능 여부({ship_nationality})", r["passage_status"])
+            st.info(f"💡 {r['recommendation_reason']}")
+
+    st.divider()
+    st.subheader("상황별 실무 대응 체크리스트")
+    if ml_pred == 2:
+        st.checkbox("1. 1순위 추천 항로 선사 및 포워더와 선복 계약 전환 협의")
+        st.checkbox("2. 통항 불가/대기 지연에 따른 화주 납기 조정 통보")
+        st.checkbox(f"3. {ship_nationality} 국적 선박 표적 가능성 점검 및 선박 보안 레벨 상향")
+    else:
+        st.checkbox("1. 대기 일수 및 통항 슬롯 실시간 확인")
+        st.checkbox("2. 우회 항로 연료 추가 소모량 및 비용 사전 산출")
+
+    if send_alert_btn:
+        st.sidebar.success(f"[알림 발송 완료] 수신처: {alert_email} | 등급: {risk_level_str} | 추천: {best_alt['route_name']}")
