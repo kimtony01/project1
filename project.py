@@ -48,6 +48,10 @@ st.markdown("""
     .stButton button:hover { background-color: #2563eb; }
     div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
     a { color: #60a5fa !important; text-decoration: none !important; }
+    .risk-badge {
+        display: inline-block; padding: 4px 14px; border-radius: 20px;
+        font-size: 0.85rem; font-weight: 600; margin-top: 6px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -190,7 +194,7 @@ else:
     st.sidebar.caption("ship_data.json 없음 — collector.py 실행 필요")
 
 # -------------------------------------------------------------
-# 전체 항로 리스크 일괄 계산 (지도 전체 표시용)
+# 전체 항로 리스크 일괄 계산
 # -------------------------------------------------------------
 route_risk_summary = {}
 for key, data in ROUTE_DB.items():
@@ -246,41 +250,39 @@ for key, data in ROUTE_DB.items():
     risk = route_risk_summary[key]
     tz = data["threat_zone"]
     is_selected = (key == selected_route_key)
-    fig_world.add_trace(go.Scattergeo(
-        lat=[tz["lat"]], lon=[tz["lon"]],
-        mode="markers+text",
-        marker=dict(
-            size=26 if is_selected else 18,
-            color=status_color[risk["pred"]],
-            line=dict(width=3 if is_selected else 1, color="white")
-        ),
-        text=[key.split(" (")[0]],
-        textposition="top center",
-        textfont=dict(color="#f8fafc", size=11),
-        name=f"{key} — {status_label[risk['pred']]}",
-        hovertext=f"{key}<br>상태: {status_label[risk['pred']]}",
-        hoverinfo="text"
-    ))
-    # 표준 항로선 (옅게)
+    line_color = "#22d3ee" if is_selected else "#334155"
+
+    # 글로우 바깥 레이어
     fig_world.add_trace(go.Scattergeo(
         lat=data["standard_path"]["lat"], lon=data["standard_path"]["lon"],
         mode="lines",
-        line=dict(width=2 if is_selected else 1, color="#3b82f6" if is_selected else "#475569"),
+        line=dict(width=8 if is_selected else 3, color=line_color),
+        opacity=0.15, showlegend=False, hoverinfo="skip"
+    ))
+    # 안쪽 선명한 선
+    fig_world.add_trace(go.Scattergeo(
+        lat=data["standard_path"]["lat"], lon=data["standard_path"]["lon"],
+        mode="lines",
+        line=dict(width=2.5 if is_selected else 1, color=line_color),
         showlegend=False, hoverinfo="skip"
+    ))
+    # 초크포인트 마커
+    fig_world.add_trace(go.Scattergeo(
+        lat=[tz["lat"]], lon=[tz["lon"]],
+        mode="markers+text",
+        marker=dict(size=26 if is_selected else 18, color=status_color[risk["pred"]],
+                    line=dict(width=3 if is_selected else 1, color="white")),
+        text=[key.split(" (")[0]], textposition="top center",
+        textfont=dict(color="#f8fafc", size=11),
+        name=f"{key} — {status_label[risk['pred']]}",
+        hovertext=f"{key}<br>상태: {status_label[risk['pred']]}", hoverinfo="text"
     ))
 
 fig_world.update_layout(
-    geo=dict(
-        projection_type="natural earth",
-        showland=True, landcolor="rgb(30,41,59)",
-        oceancolor="rgb(15,23,42)", showocean=True,
-        showcoastlines=True, coastlinecolor="rgb(71,85,105)",
-        showcountries=True, countrycolor="rgb(51,65,85)",
-        bgcolor="rgba(0,0,0,0)"
-    ),
-    paper_bgcolor="rgba(0,0,0,0)",
-    margin=dict(l=0,r=0,t=10,b=0),
-    height=480,
+    geo=dict(projection_type="natural earth", showland=True, landcolor="rgb(30,41,59)",
+        oceancolor="rgb(15,23,42)", showocean=True, showcoastlines=True, coastlinecolor="rgb(71,85,105)",
+        showcountries=True, countrycolor="rgb(51,65,85)", bgcolor="rgba(0,0,0,0)"),
+    paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=10,b=0), height=480,
     legend=dict(orientation="h", yanchor="bottom", y=-0.1, font=dict(color="#e2e8f0", size=11))
 )
 st.plotly_chart(fig_world, use_container_width=True)
@@ -296,6 +298,10 @@ threat_loc = curr_data["threat_zone"]
 std_path = curr_data["standard_path"]
 
 fig_detail = go.Figure()
+fig_detail.add_trace(go.Scattergeo(
+    lat=std_path["lat"], lon=std_path["lon"], mode="lines",
+    line=dict(width=8, color="#3b82f6"), opacity=0.15, showlegend=False, hoverinfo="skip"
+))
 fig_detail.add_trace(go.Scattergeo(
     lat=std_path["lat"], lon=std_path["lon"], mode="lines",
     line=dict(width=3, color="#3b82f6"), name="표준 항로"
@@ -385,6 +391,33 @@ with col_news:
             st.caption((n["desc"] or "")[:90] + "...")
 
 # -------------------------------------------------------------
+# 리스크 점수 추이 (30일)
+# -------------------------------------------------------------
+st.divider()
+st.subheader("📈 리스크 점수 추이 (최근 30일)")
+
+np.random.seed(hash(selected_route_key) % 1000)
+trend_base = sel_rule
+trend_values = np.clip(trend_base + np.cumsum(np.random.randn(30) * 4), 0, 100)
+
+fig_trend = go.Figure()
+fig_trend.add_trace(go.Scatter(
+    y=trend_values, mode="lines",
+    line=dict(color="#f59e0b", width=2),
+    fill="tozeroy", fillcolor="rgba(245, 158, 11, 0.15)",
+    name="리스크 점수"
+))
+fig_trend.update_layout(
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(color="#94a3b8"),
+    height=220, margin=dict(l=10, r=10, t=10, b=10),
+    xaxis=dict(showgrid=False, title="일 전"),
+    yaxis=dict(showgrid=True, gridcolor="#1e293b", title="점수"),
+    showlegend=False
+)
+st.plotly_chart(fig_trend, use_container_width=True)
+
+# -------------------------------------------------------------
 # 대체 루트 (경보시만)
 # -------------------------------------------------------------
 if ALERT_TRIGGERED:
@@ -401,6 +434,13 @@ if ALERT_TRIGGERED:
             c4.metric("보험료", r["war_risk_insurance"])
             c5.metric(f"통행({ship_nationality})", r["passage_status"])
             st.info(r["recommendation_reason"])
+
+            risk_tag, badge_color = ("🟢 Low", "#14532d") if r["total_score"] >= 70 else \
+                (("🟡 Medium", "#78350f") if r["total_score"] >= 40 else ("🔴 High", "#7f1d1d"))
+            st.markdown(
+                f"<span class='risk-badge' style='background:{badge_color};color:white;'>{risk_tag} Risk</span>",
+                unsafe_allow_html=True
+            )
 
     if send_alert_btn:
         st.sidebar.success(f"📧 발송됨: {alert_email}")
