@@ -9,7 +9,7 @@ load_dotenv()
 API_KEY = os.getenv("AISSTREAM_API_KEY")
 print("API KEY:", API_KEY)
 
-BOUNDING_BOX = [[1.0, 100.0], [6.0, 104.0]]
+BOUNDING_BOX = [[-90, -180], [90, 180]]
 
 async def collect_and_save():
     ships_data = {}
@@ -24,7 +24,7 @@ async def collect_and_save():
         await websocket.send(json.dumps(subscribe_message))
 
         try:
-            async with asyncio.timeout(60):
+            async with asyncio.timeout(120):
                 async for message_json in websocket:
                     message = json.loads(message_json)
 

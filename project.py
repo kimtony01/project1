@@ -245,7 +245,16 @@ if os.path.exists("ship_data.json"):
     st.sidebar.caption(f"업데이트: {real_ship_data['updated_at']}")
     ship_options = {m: (i.get("name","").strip() or f"MMSI:{m}") for m,i in real_ship_data["ships"].items() if "lat" in i}
     if ship_options:
-        selected_mmsi = st.sidebar.selectbox("추적할 실제 선박", list(ship_options.keys()), format_func=lambda x: ship_options[x])
+        search_term = st.sidebar.text_input("선박명으로 검색 (예: PROTI)")
+        if search_term:
+            filtered = {k: v for k, v in ship_options.items() if search_term.upper() in v.upper()}
+        else:
+            filtered = ship_options
+        if filtered:
+            selected_mmsi = st.sidebar.selectbox("추적할 실제 선박", list(filtered.keys()), format_func=lambda x: filtered[x])
+        else:
+            st.sidebar.caption("검색 결과 없음")
+            selected_mmsi = None
 else:
     st.sidebar.caption("ship_data.json 없음 — collector.py 실행 필요")
 
